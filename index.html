@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Arrival Recorder (Offline)</title>
+<meta name="description" content="Offline arrival recorder — 11 buttons, export CSV, PWA-ready" />
+<link rel="manifest" href="manifest.json" />
+<style>
+  :root{--bg:#0f172a;--card:#0b1220;--accent:#06b6d4;--text:#e6eef6}
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;background:linear-gradient(180deg,#071021 0%,#071627 100%);color:var(--text)}
+  .wrap{max-width:980px;margin:16px auto;padding:14px}
+  header{display:flex;align-items:center;gap:12px;justify-content:space-between}
+  h1{font-size:18px;margin:0}
+  p.lead{margin:0;color:#9fb6c2;font-size:13px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:14px}
+  .btn{
+    background:linear-gradient(180deg,#053042,#064b5d);
+    border-radius:12px;padding:14px;color:var(--text);text-align:center;font-weight:600;box-shadow:0 6px 16px rgba(0,0,0,.35);
+    user-select:none;touch-action:manipulation;
+  }
+  .btn.small{padding:8px;border-radius:10px;font-size:13px}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .card{background:rgba(255,255,255,0.03);padding:12px;border-radius:12px;margin-top:12px}
+  table{width:100%;border-collapse:collapse;color:var(--text);font-size:13px}
+  th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.03);text-align:left}
+  .muted{color:#94a6b0;font-size:12px}
+  .danger{background:#ff4d6d}
+  .ok{background:#10b981}
+  .small-note{font-size:12px;color:#9fb6c2}
+  .row{display:flex;gap:8px;align-items:center}
+  .flex{flex:1}
+  .icon{opacity:.9}
+  footer{margin-top:18px;color:#8fa8b3;font-size:12px;text-align:center}
+  .sync-input{width:100%;padding:8px;border-radius:8px;border:1px dashed rgba(255,255,255,0.05);background:transparent;color:var(--text)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Arrival Recorder</h1>
+      <p class="lead">Offline-first. Tap a name to record arrival time.</p>
+    </div>
+    <div class="muted">Local only • Works offline</div>
+  </header>
+
+  <div style="margin-top:12px" class="card">
+    <div class="row">
+      <div style="flex:1">
+        <label class="small-note">Names (edit directly then Save)</label>
+        <textarea id="namesInput" rows="2" style="width:100%;padding:8px;border-radius:8px;background:transparent;color:var(--text);border:1px solid rgba(255,255,255,0.04)"></textarea>
+        <div class="small-note">One name per line. Default: 11 sample names.</div>
+      </div>
+      <div style="width:120px;margin-left:12px">
+        <button id="saveNamesBtn" class="btn small">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="buttonsWrap" class="grid" style="margin-top:12px"></div>
+
+  <div class="controls">
+    <button id="exportCsv" class="btn small">Export CSV</button>
+    <button id="clearAll" class="btn small" style="background:#7f1d1d">Clear All</button>
+    <button id="clearToday" class="btn small" style="background:#1e293b">Clear Today</button>
+  </div>
+
+  <div class="card" id="todayCard">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <strong>Today — <span id="todayDate"></span></strong>
+      <div class="small-note">Tap name to record. Tap again to confirm overwrite.</div>
+    </div>
+    <table id="todayTable" style="margin-top:8px">
+      <thead><tr><th>Name</th><th>Time</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <strong>Log</strong>
+    <div class="small-note">All recorded entries (saved in your device). Use Export to download CSV.</div>
+    <table id="logTable" style="margin-top:8px">
+      <thead><tr><th>Date</th><th>Name</th><th>Time</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <strong>Optional: Sync to server</strong>
+    <div class="small-note">If you deploy a small web endpoint (e.g. Apps Script Web App), paste it below and press Sync.</div>
+    <input id="syncUrl" placeholder="https://your-endpoint.example.com/append" class="sync-input"/>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button id="syncBtn" class="btn small">Sync (send all unsynced)</button>
+      <button id="markAllSynced" class="btn small" style="background:#1e7a34">Mark all synced</button>
+    </div>
+    <div id="syncStatus" class="small-note" style="margin-top:8px"></div>
+  </div>
+
+  <footer>Made for offline use • You can install this to Home Screen (Add to Home Screen)</footer>
+</div>
+
+<script>
+/*
+  Offline Arrival Recorder
+  - stores entries in localStorage under key 'arrivalRecords'
+  - personalizable names under 'arrivalNames'
+  - each record: {id, name, iso, date, time, synced: false}
+*/
+
+const DEFAULT_NAMES = [
+  "Alice","Bob","Charlie","Diana","Ethan","Fiona","George","Hannah","Ivan","Julia","Kevin"
+];
+
+function qs(id){return document.getElementById(id)}
+
+let names = loadNames();
+let records = loadRecords();
+
+function loadNames(){
+  try{
+    const raw = localStorage.getItem('arrivalNames');
+    if(!raw) { localStorage.setItem('arrivalNames', JSON.stringify(DEFAULT_NAMES)); return DEFAULT_NAMES.slice(); }
+    return JSON.parse(raw);
+  }catch(e){ return DEFAULT_NAMES.slice(); }
+}
+
+function saveNames(newNames){
+  names = newNames.slice();
+  localStorage.setItem('arrivalNames', JSON.stringify(names));
+  renderButtons();
+  renderToday();
+}
+
+function loadRecords(){
+  try{ const raw = localStorage.getItem('arrivalRecords'); return raw ? JSON.parse(raw) : []; }
+  catch(e){ return []; }
+}
+
+function saveRecords(){
+  localStorage.setItem('arrivalRecords', JSON.stringify(records));
+}
+
+function createButton(name){
+  const b = document.createElement('button');
+  b.className = 'btn';
+  b.textContent = name;
+  b.addEventListener('click', ()=>onTapName(name,b));
+  return b;
+}
+
+let lastTap = {}; // for double-tap confirm overwrite
+
+function onTapName(name, btnEl){
+  const iso = new Date().toISOString();
+  const d = new Date();
+  const date = d.toISOString().slice(0,10);
+  const time = d.toLocaleTimeString();
+
+  // check if exists today
+  const exists = records.find(r => r.name === name && r.date === date);
+  if(!exists){
+    const rec = { id: Date.now() + Math.random().toString(36).slice(2,7), name, iso, date, time, synced:false };
+    records.push(rec);
+    saveRecords();
+    renderToday();
+    renderLog();
+    flash(btnEl, 'ok');
+    return;
+  }
+
+  // exists -> require confirm: second tap within 2s will overwrite
+  const key = name + '|' + date;
+  const now = Date.now();
+  if(lastTap[key] && now - lastTap[key] < 2000){
+    // overwrite
+    exists.iso = iso; exists.time = time; exists.synced = false;
+    saveRecords();
+    renderToday(); renderLog();
+    flash(btnEl,'ok');
+    lastTap[key]=0;
+  } else {
+    // show a quick toast in button style
+    lastTap[key] = now;
+    flash(btnEl,'danger','Tap again to overwrite');
+    setTimeout(()=>{ if(Date.now() - lastTap[key] >= 2000) lastTap[key]=0; },2100);
+  }
+}
+
+function flash(el, cls, altText){
+  const prev = el.textContent;
+  if(cls==='ok'){ el.style.transform='scale(0.98)'; setTimeout(()=>el.style.transform='',160); }
+  if(altText){ el.textContent = altText; setTimeout(()=>el.textContent=prev,1100); }
+}
+
+function renderButtons(){
+  const wrap = qs('buttonsWrap'); wrap.innerHTML='';
+  names.forEach(n => wrap.appendChild(createButton(n)));
+  qs('namesInput').value = names.join('\\n');
+}
+
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+
+function renderToday(){
+  qs('todayDate').textContent = todayStr();
+  const tbody = qs('todayTable').querySelector('tbody'); tbody.innerHTML = '';
+  names.forEach(name => {
+    const row = document.createElement('tr');
+    const tdName = document.createElement('td'); tdName.textContent = name;
+    const rec = records.find(r => r.name===name && r.date===todayStr());
+    const tdTime = document.createElement('td'); tdTime.textContent = rec ? rec.time : '';
+    const tdAct = document.createElement('td');
+    if(rec){
+      const btn = document.createElement('button'); btn.className='btn small'; btn.textContent='Clear';
+      btn.addEventListener('click', ()=>{ if(confirm('Clear today record for '+name+'?')){ records = records.filter(x=>x.id!==rec.id); saveRecords(); renderToday(); renderLog(); }});
+      tdAct.appendChild(btn);
+    } else {
+      const btn = document.createElement('button'); btn.className='btn small'; btn.textContent='Record';
+      btn.addEventListener('click', ()=>onTapName(name, btn));
+      tdAct.appendChild(btn);
+    }
+    row.appendChild(tdName); row.appendChild(tdTime); row.appendChild(tdAct);
+    tbody.appendChild(row);
+  });
+}
+
+function renderLog(){
+  const tbody = qs('logTable').querySelector('tbody'); tbody.innerHTML='';
+  // show newest first
+  const sorted = records.slice().sort((a,b)=> b.iso.localeCompare(a.iso));
+  sorted.forEach(r=>{
+    const tr = document.createElement('tr');
+    const tdDate = document.createElement('td'); tdDate.textContent = r.date;
+    const tdName = document.createElement('td'); tdName.textContent = r.name;
+    const tdTime = document.createElement('td'); tdTime.textContent = r.time + (r.synced ? ' ✓' : '');
+    const tdAct = document.createElement('td');
+    const del = document.createElement('button'); del.className='btn small'; del.textContent='Delete';
+    del.addEventListener('click', ()=>{ if(confirm('Delete entry for '+r.name+' at '+r.time+'?')){ records = records.filter(x=>x.id!==r.id); saveRecords(); renderToday(); renderLog(); }});
+    tdAct.appendChild(del);
+    tr.appendChild(tdDate); tr.appendChild(tdName); tr.appendChild(tdTime); tr.appendChild(tdAct);
+    tbody.appendChild(tr);
+  });
+}
+
+/* CSV Export */
+function exportCSV(){
+  if(records.length===0){ alert('No records to export'); return; }
+  const header = ['id','name','date','time','iso'];
+  const rows = records.map(r => header.map(h => JSON.stringify(r[h] || '')).join(','));
+  const csv = [header.join(','), ...rows].join('\\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'arrival_records_'+ (new Date().toISOString().slice(0,10)) +'.csv';
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+
+/* Clear functions */
+function clearAll(){
+  if(!confirm('Delete all records and reset names?')) return;
+  records = []; saveRecords();
+  localStorage.removeItem('arrivalNames');
+  saveNames(DEFAULT_NAMES.slice());
+  renderLog(); renderToday();
+}
+function clearToday(){
+  const today = todayStr();
+  records = records.filter(r => r.date !== today);
+  saveRecords();
+  renderLog(); renderToday();
+}
+
+/* Sync to endpoint (optional) */
+async function syncToEndpoint(url){
+  if(!url){ qs('syncStatus').textContent='Paste endpoint URL first.'; return; }
+  if(records.length===0){ qs('syncStatus').textContent='No records to sync.'; return; }
+  qs('syncStatus').textContent='Syncing...';
+  try{
+    const unsynced = records.filter(r=>!r.synced);
+    if(unsynced.length===0){ qs('syncStatus').textContent='All records already synced.'; return; }
+    const res = await fetch(url, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({records: unsynced})
+    });
+    if(!res.ok) throw new Error('Server responded '+res.status);
+    // mark synced
+    records.forEach(r=>{ if(!r.synced) r.synced = true; });
+    saveRecords();
+    renderLog(); renderToday();
+    qs('syncStatus').textContent='Synced '+unsynced.length+' records.';
+  }catch(err){
+    qs('syncStatus').textContent='Sync failed: '+err.message;
+  }
+}
+
+/* Utility: mark all synced */
+function markAllSynced(){
+  records.forEach(r=> r.synced = true);
+  saveRecords(); renderLog(); qs('syncStatus').textContent='Marked all synced.';
+}
+
+/* init */
+qs('saveNamesBtn').addEventListener('click', ()=>{
+  const text = qs('namesInput').value.trim();
+  if(!text){ alert('Enter at least one name'); return; }
+  const arr = text.split('\\n').map(s=>s.trim()).filter(Boolean);
+  if(arr.length===0){ alert('Enter at least one name'); return; }
+  saveNames(arr);
+});
+qs('exportCsv').addEventListener('click', exportCSV);
+qs('clearAll').addEventListener('click', clearAll);
+qs('clearToday').addEventListener('click', clearToday);
+qs('syncBtn').addEventListener('click', ()=>syncToEndpoint(qs('syncUrl').value.trim()));
+qs('markAllSynced').addEventListener('click', markAllSynced);
+
+// initialize UI
+qs('namesInput').value = names.join('\\n');
+renderButtons();
+renderToday();
+renderLog();
+
+/* Service worker registration for offline caching */
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('sw.js').then(()=>console.log('SW registered')).catch(()=>console.log('SW failed'));
+}
+</script>
+</body>
+</html>
