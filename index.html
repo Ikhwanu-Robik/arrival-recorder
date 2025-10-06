@@ -278,8 +278,9 @@ async function syncToEndpoint(url){
     const unsynced = records.filter(r=>!r.synced);
     if(unsynced.length===0){ qs('syncStatus').textContent='All records already synced.'; return; }
     const res = await fetch(url, {
+      redirect: 'follow',
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
       body: JSON.stringify({records: unsynced})
     });
     if(!res.ok) throw new Error('Server responded '+res.status);
